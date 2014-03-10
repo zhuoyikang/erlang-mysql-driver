@@ -624,7 +624,7 @@ handle_cast({unprepare, Name}, State) ->
 %% to establish a new connection to the database.
 handle_info({'DOWN', _MonitorRef, process, Pid, Info}, State) ->
     LogFun = State#state.log_fun,
-    case remove_conn(Pid, State) of
+  case remove_conn(Pid, State) of
 	{ok, Conn, NewState} ->
 	    LogLevel = case Info of
 			   normal -> normal;

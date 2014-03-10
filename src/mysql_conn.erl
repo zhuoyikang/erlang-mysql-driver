@@ -74,6 +74,7 @@
 	 start_link/8,
 	 fetch/3,
 	 fetch/4,
+   quit/1,
 	 execute/5,
 	 execute/6,
 	 transaction/3,
@@ -213,6 +214,9 @@ fetch(Pid, Queries, From) ->
 
 fetch(Pid, Queries, From, Timeout)  ->
     do_fetch(Pid, Queries, From, Timeout).
+
+quit(Pid)->
+    send_msg(Pid, {quit, self()}, self(), ?DEFAULT_STANDALONE_TIMEOUT).
 
 execute(Pid, Name, Version, Params, From) ->
     execute(Pid, Name, Version, Params, From, ?DEFAULT_STANDALONE_TIMEOUT).
@@ -372,13 +376,14 @@ init(Host, Port, User, Password, Database, LogFun, Encoding, PoolId, Parent) ->
 %% Returns : error | does not return
 %%--------------------------------------------------------------------
 loop(State) ->
-    RecvPid = State#state.recv_pid,
-    LogFun = State#state.log_fun,
-    receive
-	{fetch, Queries, From} ->
-	    send_reply(From, do_queries(State, Queries)),
-	    loop(State);
-	{transaction, Fun, From} ->
+  RecvPid = State#state.recv_pid,
+  LogFun = State#state.log_fun,
+  receive
+    {fetch, Queries, From} ->
+      Res = do_queries(State, Queries),
+      send_reply(From, Res),
+	    loop(Res, State);
+    {transaction, Fun, From} ->
 	    put(?STATE_VAR, State),
 
 	    Res = do_transaction(State, Fun),
@@ -389,28 +394,39 @@ loop(State) ->
 	    State1 = get(?STATE_VAR),
 
 	    send_reply(From, Res),
-	    loop(State1);
-	{execute, Name, Version, Params, From} ->
-	    State1 =
-		case do_execute(State, Name, Params, Version) of
-		    {error, _} = Err ->
-			send_reply(From, Err),
-			State;
-		    {ok, Result, NewState} ->
-			send_reply(From, Result),
-			NewState
-		end,
-	    loop(State1);
-	{mysql_recv, RecvPid, data, Packet, Num} ->
-	    ?Log2(LogFun, error,
-		 "received data when not expecting any -- "
-		 "ignoring it: {~p, ~p}", [Num, Packet]),
-	    loop(State);
-        Unknown ->
-	    ?Log2(LogFun, error,
-		  "received unknown signal, exiting: ~p", [Unknown]),
-	    error
-    end.
+	    loop(Res, State1);
+    {execute, Name, Version, Params, From} ->
+	    {State1, Res} =
+        case do_execute(State, Name, Params, Version) of
+          {error, _} = Err ->
+            send_reply(From, Err),
+            {State, Err};
+          {ok, Result, NewState} ->
+            send_reply(From, Result),
+            {NewState, ok}
+        end,
+      loop(Res, State1);
+    {mysql_recv, RecvPid, data, Packet, Num} ->
+      ?Log2(LogFun, error,
+            "received data when not expecting any -- "
+            "ignoring it: {~p, ~p}", [Num, Packet]),
+      loop(State);
+    {quit, From} ->
+      send_reply(From, quit),
+      loop({error, closed}, State);
+    Unknown ->
+      ?Log2(LogFun, error,
+            "received unknown signal, exiting: ~p", [Unknown]),
+      error
+  end.
+
+loop({error, closed}, State) ->
+  gen_tcp:close(State#state.socket),
+  error_logger:error_msg("mysql conn error stop"),
+  ok;
+loop(_, State) ->
+  loop(State).
+
 
 %% GenSrvFrom is either a gen_server:call/3 From term(),
 %% or a pid if no gen_server was used to make the query

@@ -420,7 +420,7 @@ loop(State) ->
       error
   end.
 
-loop({error, closed}, State) ->
+loop({error, [70,97,105,108,101,100,32|_]}, State) ->
   gen_tcp:close(State#state.socket),
   error_logger:error_msg("mysql conn error stop"),
   ok;
